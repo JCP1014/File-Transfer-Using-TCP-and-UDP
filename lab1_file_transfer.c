@@ -379,36 +379,14 @@ void send_image(int sock, char fileName[256])
     // Send image size
     write(sock, &size, sizeof(size));
 
-        while(1)
-    {
-        unsigned char buff[1] = {0};
-        int nread = fread(buff,1,1,image);
-        if(nread>0)
-        {
-            write(sock,buff,nread);
-        }
-        if(nread < 1)
-        {
-            if(feof(image))
-            {
-                printf("End of file\n");
-                printf("File transfer completed\n");
-            }
-            if(ferror(image))
-            {
-                printf("Error reading\n");
-            }
-            break;
-        }
-    }
-    // Send image as byte array
-    /*char send_buffer[size];
+    char send_buffer[1];
     while (!feof(image))
     {
-        fread(send_buffer, 1, sizeof(send_buffer), image);
+        fread(send_buffer,1,1,image);
         write(sock, send_buffer, sizeof(send_buffer));
         bzero(send_buffer, sizeof(send_buffer));
-    }*/
+    }
+    printf("File transfer completed\n");
 }
 
 void recv_image(int sock)
@@ -422,8 +400,8 @@ void recv_image(int sock)
     printf("%d\n", size);
 
     // Read image byte array
-    char p_array[size];
-    read(sock, p_array, size);
+    /*char p_array[size];
+    read(sock, p_array, size);*/
 
     // Convert it back into picture
     FILE *image;
@@ -440,7 +418,7 @@ void recv_image(int sock)
     char recvBuff[1];
     while( (bytesReceived = read(sock,recvBuff,1)) > 0)
     {
-        ++sz;
+        sz += bytesReceived;
         printf("Received : %.2f%%\n",sz/size*100);
         fflush(stdout);
         fwrite(recvBuff,1,bytesReceived,image);
