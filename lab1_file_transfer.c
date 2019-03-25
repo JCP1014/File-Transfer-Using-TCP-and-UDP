@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
     char *ip;
     int port;
     char *fileName = NULL;
+
     if (argc >= 5)
     {
         ip = argv[3];
@@ -134,10 +135,6 @@ void tcp_client(char *ip, int port)
     struct sockaddr_in serv_addr;
     struct hostent *server;
     char buffer[256];
-    time_t timep;
-    struct tm *p;
-    time(&timep);
-    p = localtime(&timep);
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
@@ -160,7 +157,6 @@ void tcp_client(char *ip, int port)
     n = read(sockfd, buffer, 3);
     if (n < 0)
         error("ERROR reading from socket");
-    printf("%s\n", buffer);
     if (strcmp(buffer, "msg") == 0)
     {
         recv_message(sockfd);
@@ -176,6 +172,7 @@ void tcp_client(char *ip, int port)
 void udp_server(char *ip, int port, char fileName[256])
 {
     int sock;
+    const struct timeval sock_timeout = {.tv_sec = 1, .tv_usec = 0};
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
         ERR_EXIT("socket error");
 
@@ -206,10 +203,8 @@ void udp_server(char *ip, int port, char fileName[256])
         }
         else if (n > 0)
         {
-            printf("connected\n");
             if (fileName == NULL)
             {
-                printf("msg\n");
                 if (sendto(sock, "msg", 3, 0,
                            (struct sockaddr *)&peeraddr, peerlen) < 0)
                     perror("ERROR sending to client");
@@ -229,6 +224,7 @@ void udp_server(char *ip, int port, char fileName[256])
 
                 int index = 0;
                 char send_buf[1];
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
                 while (index < words)
                 {
                     send_buf[0] = message[index];
@@ -279,6 +275,8 @@ void udp_server(char *ip, int port, char fileName[256])
                     error("ERROR sending to client");
 
                 char send_buf[1];
+                int count = 0;
+                //setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
                 while (!feof(image))
                 {
                     fread(send_buf, 1, 1, image);
@@ -286,8 +284,8 @@ void udp_server(char *ip, int port, char fileName[256])
                                (struct sockaddr *)&peeraddr, peerlen) < 0)
                         error("ERROR sending to client");
                     bzero(recv_buf, sizeof(recv_buf));
-                    recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
-                             (struct sockaddr *)&peeraddr, &peerlen);
+                    int n = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                                     (struct sockaddr *)&peeraddr, &peerlen);
                     while (strcmp(recv_buf, "ACK") != 0)
                     {
                         sendto(sock, send_buf, sizeof(send_buf), 0,
@@ -296,6 +294,8 @@ void udp_server(char *ip, int port, char fileName[256])
                         recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
                                  (struct sockaddr *)&peeraddr, &peerlen);
                     }
+                    ++count;
+                    printf("%d\n", count);
                 }
                 printf("File transfer completed\n");
             }
@@ -308,6 +308,7 @@ void udp_server(char *ip, int port, char fileName[256])
 
 void udp_client(char *ip, int port)
 {
+    const struct timeval sock_timeout = {.tv_sec = 1, .tv_usec = 0};
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
         ERR_EXIT("socket");
@@ -325,6 +326,8 @@ void udp_client(char *ip, int port)
     int addr_len = sizeof(servaddr);
     sendto(sock, "Connected", 9, 0, (struct sockaddr *)&servaddr, addr_len);
     ret = recvfrom(sock, recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&servaddr, &addr_len);
+    if (ret < 0)
+        error("recv error");
     if (ret == -1)
     {
         if (errno != EINTR)
@@ -340,12 +343,17 @@ void udp_client(char *ip, int port)
             if (errno != EINTR)
                 ERR_EXIT("recvfrom");
         }
+        char message[words];
+        bzero(message, words);
         //printf("words = %d\n", words);
 
         double len = 0;
         int bytesReceived = 0;
         char recv_buf[2];
+        long double progress = 0;
+        int record = 0;
         bzero(recv_buf, 2);
+        //setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
         while (len < words)
         {
             bytesReceived = recvfrom(sock, recv_buf, 1, 0, (struct sockaddr *)&servaddr, &addr_len);
@@ -357,11 +365,21 @@ void udp_client(char *ip, int port)
             sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
             len += bytesReceived;
             recv_buf[1] = '\0';
-            printf("%s", recv_buf);
-            printf("Received : %.2f%%\n", len / words * 100);
+            strncat(message, recv_buf, 1);
+            progress = len / words * 100;
+            if (progress - record >= 5)
+            {
+                static time_t timep;
+                static struct tm *p;
+                time(&timep);
+                p = localtime(&timep);
+                printf("%.0Lf%% %d/%d/%d %d:%d:%d\n", progress, p->tm_year + 1900, p->tm_mon + 1, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+                record += 5;
+            }
             bzero(recv_buf, 2);
         }
         printf("Completed\n");
+        printf("message : %s\n", message);
     }
     else if (strcmp(recvbuf, "img") == 0)
     {
@@ -400,7 +418,10 @@ void udp_client(char *ip, int port)
         long double sz = 0;
         int bytesReceived = 0;
         char recv_buf[2];
+        long double progress = 0;
+        int record = 0;
         bzero(recv_buf, 2);
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
         while (sz < size)
         {
             bytesReceived = recvfrom(sock, recv_buf, 1, 0, (struct sockaddr *)&servaddr, &addr_len);
@@ -412,7 +433,16 @@ void udp_client(char *ip, int port)
             sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
             sz += bytesReceived;
             recv_buf[1] = '\0';
-            printf("Received : %.2Lf%%\n", sz / size * 100);
+            progress = sz / size * 100;
+            if (progress - record >= 5)
+            {
+                static time_t timep;
+                static struct tm *p;
+                time(&timep);
+                p = localtime(&timep);
+                printf("%.0Lf%% %d/%d/%d %d:%d:%d\n", progress, p->tm_year + 1900, p->tm_mon + 1, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+                record += 5;
+            }
             fflush(stdout);
             fwrite(recv_buf, 1, bytesReceived, image);
             bzero(recv_buf, 2);
@@ -420,25 +450,6 @@ void udp_client(char *ip, int port)
         printf("Completed\n");
         fclose(image);
     }
-
-    /*while (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL)
-    {
-
-        sendto(sock, sendbuf, strlen(sendbuf), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
-
-        ret = recvfrom(sock, recvbuf, sizeof(recvbuf), 0, NULL, NULL);
-        if (ret == -1)
-        {
-            if (errno == EINTR)
-                continue;
-            ERR_EXIT("recvfrom");
-        }
-
-        fputs(recvbuf, stdout);
-        memset(sendbuf, 0, sizeof(sendbuf));
-        memset(recvbuf, 0, sizeof(recvbuf));
-    }*/
-
     close(sock);
 }
 
@@ -470,22 +481,37 @@ void send_message(int sock)
 }
 void recv_message(int sock)
 {
+
     int words = 0;
     int n = read(sock, &words, sizeof(words));
     if (n < 0)
         error("ERROR reading from socket");
+    char message[words];
+    bzero(message, words);
     //printf("words = %d\n", words);
 
     double len = 0;
     int bytesReceived = 0;
     char recv_buf[2];
+    long double progress = 0;
+    int record = 0;
     bzero(recv_buf, 2);
     while ((bytesReceived = read(sock, recv_buf, 1)) > 0)
     {
         len += bytesReceived;
         recv_buf[1] = '\0';
-        printf("Received : %.2f%%\n", len / words * 100);
-        printf("%s", recv_buf);
+        strncat(message, recv_buf, 1);
+        progress = len / words * 100;
+        if (progress - record >= 5)
+        {
+            static time_t timep;
+            static struct tm *p;
+            time(&timep);
+            p = localtime(&timep);
+            printf("%.0Lf%% %d/%d/%d %d:%d:%d\n", progress, p->tm_year + 1900, p->tm_mon + 1, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+            record += 5;
+        }
+        //printf("%s", recv_buf);
         bzero(recv_buf, 2);
     }
     if (bytesReceived < 0)
@@ -493,6 +519,7 @@ void recv_message(int sock)
         printf("Read Error\n");
     }
     printf("Completed\n");
+    printf("message : %s\n", message);
 }
 void send_image(int sock, char *fileName)
 {
@@ -526,6 +553,7 @@ void send_image(int sock, char *fileName)
 
 void recv_image(int sock)
 {
+
     char fileName[256];
     read(sock, fileName, 256);
     //printf("%s\n", fileName);
@@ -548,11 +576,22 @@ void recv_image(int sock)
     long double sz = 0;
     int bytesReceived = 0;
     char recv_buf[2];
+    long double progress = 0;
+    int record = 0;
     while ((bytesReceived = read(sock, recv_buf, 1)) > 0)
     {
         sz += bytesReceived;
         recv_buf[1] = '\0';
-        printf("Received : %.2Lf%%\n", sz / size * 100);
+        progress = sz / size * 100;
+        if (progress - record >= 5)
+        {
+            static time_t timep;
+            static struct tm *p;
+            time(&timep);
+            p = localtime(&timep);
+            printf("%.0Lf%% %d/%d/%d %d:%d:%d\n", progress, p->tm_year + 1900, p->tm_mon + 1, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+            record += 5;
+        }
         fflush(stdout);
         fwrite(recv_buf, 1, bytesReceived, image);
     }
