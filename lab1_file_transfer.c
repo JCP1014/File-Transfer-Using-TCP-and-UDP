@@ -173,7 +173,7 @@ void tcp_client(char *ip, int port)
     close(sockfd);
 }
 
-void udp_server(char *ip, int port, char *fileName)
+void udp_server(char *ip, int port, char fileName[256])
 {
     int sock;
     if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
@@ -188,32 +188,119 @@ void udp_server(char *ip, int port, char *fileName)
     if (bind(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
         ERR_EXIT("bind error");
 
-    char recvbuf[1024] = {0};
+    char send_buf[1024] = {0};
+    char recv_buf[1024] = {0};
     struct sockaddr_in peeraddr;
-    socklen_t peerlen;
+    socklen_t peerlen = sizeof(peeraddr);
     int n;
 
     while (1)
     {
-
-        peerlen = sizeof(peeraddr);
-        memset(recvbuf, 0, sizeof(recvbuf));
-        n = recvfrom(sock, recvbuf, sizeof(recvbuf), 0,
+        n = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
                      (struct sockaddr *)&peeraddr, &peerlen);
         if (n == -1)
         {
-
             if (errno == EINTR)
                 continue;
-
             ERR_EXIT("recvfrom error");
         }
         else if (n > 0)
         {
+            printf("connected\n");
+            if (fileName == NULL)
+            {
+                printf("msg\n");
+                if (sendto(sock, "msg", 3, 0,
+                           (struct sockaddr *)&peeraddr, peerlen) < 0)
+                    perror("ERROR sending to client");
 
-            fputs(recvbuf, stdout);
-            sendto(sock, recvbuf, n, 0,
-                   (struct sockaddr *)&peeraddr, peerlen);
+                char message[1024];
+                int words = 0;
+                bzero(message, 1024);
+                printf("Please enter the message: ");
+                fgets(message, 255, stdin);
+                if (message[strlen(message) - 1] == '\n')
+                    message[strlen(message) - 1] = '\0';
+                words = strlen(message);
+                printf("words = %ld\n", strlen(message));
+                if (sendto(sock, &words, sizeof(words), 0,
+                           (struct sockaddr *)&peeraddr, peerlen) < 0)
+                    error("ERROR sending to client");
+
+                int index = 0;
+                char send_buf[1];
+                while (index < words)
+                {
+                    send_buf[0] = message[index];
+                    if (sendto(sock, send_buf, sizeof(send_buf), 0,
+                               (struct sockaddr *)&peeraddr, peerlen) < 0)
+                        error("ERROR sending to client");
+                    bzero(recv_buf, sizeof(recv_buf));
+                    recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                             (struct sockaddr *)&peeraddr, &peerlen);
+                    //printf("%s\n", recv_buf);
+                    while (strcmp(recv_buf, "ACK") != 0)
+                    {
+                        sendto(sock, send_buf, sizeof(send_buf), 0,
+                               (struct sockaddr *)&peeraddr, peerlen);
+                        bzero(recv_buf, sizeof(recv_buf));
+                        recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                                 (struct sockaddr *)&peeraddr, &peerlen);
+                    }
+                    ++index;
+                }
+            }
+            else
+            {
+                if (sendto(sock, "img", 3, 0,
+                           (struct sockaddr *)&peeraddr, peerlen) < 0)
+                    perror("ERROR sending to client");
+
+                strcat(fileName, "\0");
+                if (sendto(sock, fileName, strlen(fileName), 0,
+                           (struct sockaddr *)&peeraddr, peerlen) < 0)
+                    error("ERROR sending to client");
+                // Get image size
+                FILE *image;
+                unsigned long long size;
+                image = fopen(fileName, "rb");
+                if (image == NULL)
+                {
+                    printf("File open error\n");
+                    return;
+                }
+                fseek(image, 0, SEEK_END);
+                size = ftell(image);
+                fseek(image, 0, SEEK_SET);
+
+                // Send image size
+                if (sendto(sock, &size, sizeof(size), 0,
+                           (struct sockaddr *)&peeraddr, peerlen) < 0)
+                    error("ERROR sending to client");
+
+                char send_buf[1];
+                while (!feof(image))
+                {
+                    fread(send_buf, 1, 1, image);
+                    if (sendto(sock, send_buf, sizeof(send_buf), 0,
+                               (struct sockaddr *)&peeraddr, peerlen) < 0)
+                        error("ERROR sending to client");
+                    bzero(recv_buf, sizeof(recv_buf));
+                    recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                             (struct sockaddr *)&peeraddr, &peerlen);
+                    while (strcmp(recv_buf, "ACK") != 0)
+                    {
+                        sendto(sock, send_buf, sizeof(send_buf), 0,
+                               (struct sockaddr *)&peeraddr, peerlen);
+                        bzero(recv_buf, sizeof(recv_buf));
+                        recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                                 (struct sockaddr *)&peeraddr, &peerlen);
+                    }
+                }
+                printf("File transfer completed\n");
+            }
+            //sendto(sock, recv_buf, n, 0,
+            //       (struct sockaddr *)&peeraddr, peerlen);
         }
     }
     close(sock);
@@ -234,7 +321,107 @@ void udp_client(char *ip, int port)
     int ret;
     char sendbuf[1024] = {0};
     char recvbuf[1024] = {0};
-    while (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL)
+    bzero(recvbuf, 1024);
+    int addr_len = sizeof(servaddr);
+    sendto(sock, "Connected", 9, 0, (struct sockaddr *)&servaddr, addr_len);
+    ret = recvfrom(sock, recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&servaddr, &addr_len);
+    if (ret == -1)
+    {
+        if (errno != EINTR)
+            ERR_EXIT("recvfrom");
+    }
+    if (strcmp(recvbuf, "msg") == 0)
+    {
+        memset(recvbuf, 0, sizeof(recvbuf));
+        int words = 0;
+        ret = recvfrom(sock, &words, sizeof(words), 0, (struct sockaddr *)&servaddr, &addr_len);
+        if (ret == -1)
+        {
+            if (errno != EINTR)
+                ERR_EXIT("recvfrom");
+        }
+        //printf("words = %d\n", words);
+
+        double len = 0;
+        int bytesReceived = 0;
+        char recv_buf[2];
+        bzero(recv_buf, 2);
+        while (len < words)
+        {
+            bytesReceived = recvfrom(sock, recv_buf, 1, 0, (struct sockaddr *)&servaddr, &addr_len);
+            if (bytesReceived < 1)
+            {
+                sendto(sock, "LOSS", 4, 0, (struct sockaddr *)&servaddr, addr_len);
+                continue;
+            }
+            sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
+            len += bytesReceived;
+            recv_buf[1] = '\0';
+            printf("%s", recv_buf);
+            printf("Received : %.2f%%\n", len / words * 100);
+            bzero(recv_buf, 2);
+        }
+        printf("Completed\n");
+    }
+    else if (strcmp(recvbuf, "img") == 0)
+    {
+        memset(recvbuf, 0, sizeof(recvbuf));
+
+        char fileName[256];
+        bzero(fileName, 256);
+        ret = recvfrom(sock, fileName, sizeof(fileName), 0, (struct sockaddr *)&servaddr, &addr_len);
+        if (ret == -1)
+        {
+            if (errno != EINTR)
+                ERR_EXIT("recvfrom");
+        }
+        //printf("%s\n", fileName);
+        // Read image size
+        unsigned long long size;
+        ret = recvfrom(sock, &size, sizeof(size), 0, (struct sockaddr *)&servaddr, &addr_len);
+        if (ret == -1)
+        {
+            if (errno != EINTR)
+                ERR_EXIT("recvfrom");
+        }
+        //printf("%lld\n", size);
+
+        // Convert it back into picture
+        FILE *image;
+        char filePath[1024] = "./Received/";
+        strcat(filePath, fileName);
+        image = fopen(filePath, "wb");
+        if (image == NULL)
+        {
+            printf("Error openning file.\n");
+            return;
+        }
+
+        long double sz = 0;
+        int bytesReceived = 0;
+        char recv_buf[2];
+        bzero(recv_buf, 2);
+        while (sz < size)
+        {
+            bytesReceived = recvfrom(sock, recv_buf, 1, 0, (struct sockaddr *)&servaddr, &addr_len);
+            if (bytesReceived < 1)
+            {
+                sendto(sock, "LOSS", 4, 0, (struct sockaddr *)&servaddr, addr_len);
+                continue;
+            }
+            sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
+            sz += bytesReceived;
+            recv_buf[1] = '\0';
+            printf("Received : %.2Lf%%\n", sz / size * 100);
+            fflush(stdout);
+            fwrite(recv_buf, 1, bytesReceived, image);
+            bzero(recv_buf, 2);
+        }
+        printf("Completed\n");
+        fclose(image);
+    }
+
+    /*while (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL)
     {
 
         sendto(sock, sendbuf, strlen(sendbuf), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
@@ -250,7 +437,7 @@ void udp_client(char *ip, int port)
         fputs(recvbuf, stdout);
         memset(sendbuf, 0, sizeof(sendbuf));
         memset(recvbuf, 0, sizeof(recvbuf));
-    }
+    }*/
 
     close(sock);
 }
@@ -265,17 +452,17 @@ void send_message(int sock)
     if (message[strlen(message) - 1] == '\n')
         message[strlen(message) - 1] = '\0';
     words = strlen(message);
-    printf("words = %ld\n", strlen(message));
+    //printf("words = %ld\n", strlen(message));
     int n = write(sock, &words, sizeof(words));
     if (n < 0)
         error("ERROR writing to socket");
 
     int index = 0;
-    char send_buff[1];
+    char send_buf[1];
     while (index < words)
     {
-        send_buff[0] = message[index];
-        write(sock, send_buff, 1);
+        send_buf[0] = message[index];
+        write(sock, send_buf, 1);
         if (n < 0)
             error("ERROR writing to socket");
         ++index;
@@ -287,18 +474,19 @@ void recv_message(int sock)
     int n = read(sock, &words, sizeof(words));
     if (n < 0)
         error("ERROR reading from socket");
-    printf("words = %d\n", words);
+    //printf("words = %d\n", words);
 
     double len = 0;
     int bytesReceived = 0;
-    char recvBuff[1];
-    bzero(recvBuff, 1);
-    while ((bytesReceived = read(sock, recvBuff, 1)) > 0)
+    char recv_buf[2];
+    bzero(recv_buf, 2);
+    while ((bytesReceived = read(sock, recv_buf, 1)) > 0)
     {
         len += bytesReceived;
+        recv_buf[1] = '\0';
         printf("Received : %.2f%%\n", len / words * 100);
-        printf("%s", recvBuff);
-        bzero(recvBuff, 1);
+        printf("%s", recv_buf);
+        bzero(recv_buf, 2);
     }
     if (bytesReceived < 0)
     {
@@ -306,11 +494,10 @@ void recv_message(int sock)
     }
     printf("Completed\n");
 }
-void send_image(int sock, char fileName[256])
+void send_image(int sock, char *fileName)
 {
     strcat(fileName, "\0");
     write(sock, fileName, 256);
-    printf("send fileName : %s\n", fileName);
     // Get image size
     FILE *image;
     unsigned long long size;
@@ -327,12 +514,12 @@ void send_image(int sock, char fileName[256])
     // Send image size
     write(sock, &size, sizeof(size));
 
-    char send_buffer[1];
+    char send_buf[1];
     while (!feof(image))
     {
-        fread(send_buffer, 1, 1, image);
-        write(sock, send_buffer, sizeof(send_buffer));
-        bzero(send_buffer, sizeof(send_buffer));
+        fread(send_buf, 1, 1, image);
+        write(sock, send_buf, sizeof(send_buf));
+        bzero(send_buf, sizeof(send_buf));
     }
     printf("File transfer completed\n");
 }
@@ -341,11 +528,11 @@ void recv_image(int sock)
 {
     char fileName[256];
     read(sock, fileName, 256);
-    printf("%s\n", fileName);
+    //printf("%s\n", fileName);
     // Read image size
     unsigned long long size;
     read(sock, &size, sizeof(size));
-    printf("%lld\n", size);
+    //printf("%lld\n", size);
 
     // Convert it back into picture
     FILE *image;
@@ -360,13 +547,14 @@ void recv_image(int sock)
 
     long double sz = 0;
     int bytesReceived = 0;
-    char recvBuff[1];
-    while ((bytesReceived = read(sock, recvBuff, 1)) > 0)
+    char recv_buf[2];
+    while ((bytesReceived = read(sock, recv_buf, 1)) > 0)
     {
         sz += bytesReceived;
+        recv_buf[1] = '\0';
         printf("Received : %.2Lf%%\n", sz / size * 100);
         fflush(stdout);
-        fwrite(recvBuff, 1, bytesReceived, image);
+        fwrite(recv_buf, 1, bytesReceived, image);
     }
     if (bytesReceived < 0)
     {
