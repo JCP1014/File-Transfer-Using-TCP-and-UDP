@@ -197,7 +197,7 @@ void udp_server(char *ip, int port, char fileName[256])
                      (struct sockaddr *)&peeraddr, &peerlen);
         if (n == -1)
         {
-            if (errno == EINTR)
+            if (errno == EINTR || errno == EAGAIN)
                 continue;
             ERR_EXIT("recvfrom error");
         }
@@ -217,7 +217,6 @@ void udp_server(char *ip, int port, char fileName[256])
                 if (message[strlen(message) - 1] == '\n')
                     message[strlen(message) - 1] = '\0';
                 words = strlen(message);
-                printf("words = %ld\n", strlen(message));
                 if (sendto(sock, &words, sizeof(words), 0,
                            (struct sockaddr *)&peeraddr, peerlen) < 0)
                     error("ERROR sending to client");
@@ -245,6 +244,7 @@ void udp_server(char *ip, int port, char fileName[256])
                     }
                     ++index;
                 }
+                printf("Completed\n");
             }
             else
             {
@@ -275,32 +275,38 @@ void udp_server(char *ip, int port, char fileName[256])
                     error("ERROR sending to client");
 
                 char send_buf[1];
-                int count = 0;
+                //int count = 1;
                 //setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
                 while (!feof(image))
                 {
-                    fread(send_buf, 1, 1, image);
+                    //printf("%d\n", count);
+                    if(fread(send_buf, 1, 1, image)==0)
+                        break;
                     if (sendto(sock, send_buf, sizeof(send_buf), 0,
                                (struct sockaddr *)&peeraddr, peerlen) < 0)
                         error("ERROR sending to client");
                     bzero(recv_buf, sizeof(recv_buf));
                     int n = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
                                      (struct sockaddr *)&peeraddr, &peerlen);
+                    if (n < 0)
+                        error("289");
                     while (strcmp(recv_buf, "ACK") != 0)
                     {
-                        sendto(sock, send_buf, sizeof(send_buf), 0,
-                               (struct sockaddr *)&peeraddr, peerlen);
+                        n = sendto(sock, send_buf, sizeof(send_buf), 0,
+                                   (struct sockaddr *)&peeraddr, peerlen);
+                        if (n < 0)
+                            error("293");
                         bzero(recv_buf, sizeof(recv_buf));
-                        recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
-                                 (struct sockaddr *)&peeraddr, &peerlen);
+                        n = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                                     (struct sockaddr *)&peeraddr, &peerlen);
+                        if (n < 0)
+                            error("298");
                     }
-                    ++count;
-                    printf("%d\n", count);
+                    //printf("%d\n", count);
+                    //++count;
                 }
-                printf("File transfer completed\n");
+                printf("Completed\n");
             }
-            //sendto(sock, recv_buf, n, 0,
-            //       (struct sockaddr *)&peeraddr, peerlen);
         }
     }
     close(sock);
@@ -324,28 +330,29 @@ void udp_client(char *ip, int port)
     char recvbuf[1024] = {0};
     bzero(recvbuf, 1024);
     int addr_len = sizeof(servaddr);
-    sendto(sock, "Connected", 9, 0, (struct sockaddr *)&servaddr, addr_len);
+    ret = sendto(sock, "Connected", 9, 0, (struct sockaddr *)&servaddr, addr_len);
+    if (ret < 0)
+        error("sendto error");
     ret = recvfrom(sock, recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&servaddr, &addr_len);
     if (ret < 0)
         error("recv error");
-    if (ret == -1)
+    /*if (ret == -1)
     {
-        if (errno != EINTR)
+        if (errno != EINTR && errno != EAGAIN)
             ERR_EXIT("recvfrom");
-    }
+    }*/
     if (strcmp(recvbuf, "msg") == 0)
     {
         memset(recvbuf, 0, sizeof(recvbuf));
         int words = 0;
         ret = recvfrom(sock, &words, sizeof(words), 0, (struct sockaddr *)&servaddr, &addr_len);
-        if (ret == -1)
+        /*if (ret == -1)
         {
-            if (errno != EINTR)
+            if (errno != EINTR && errno != EAGAIN)
                 ERR_EXIT("recvfrom");
-        }
+        }*/
         char message[words];
         bzero(message, words);
-        //printf("words = %d\n", words);
 
         double len = 0;
         int bytesReceived = 0;
@@ -378,7 +385,6 @@ void udp_client(char *ip, int port)
             }
             bzero(recv_buf, 2);
         }
-        printf("Completed\n");
         printf("message : %s\n", message);
     }
     else if (strcmp(recvbuf, "img") == 0)
@@ -388,20 +394,24 @@ void udp_client(char *ip, int port)
         char fileName[256];
         bzero(fileName, 256);
         ret = recvfrom(sock, fileName, sizeof(fileName), 0, (struct sockaddr *)&servaddr, &addr_len);
-        if (ret == -1)
+        if (ret < 0)
+            error("396");
+        /*if (ret == -1)
         {
-            if (errno != EINTR)
+            if (errno != EINTR && errno != EAGAIN)
                 ERR_EXIT("recvfrom");
-        }
+        }*/
         //printf("%s\n", fileName);
         // Read image size
         unsigned long long size;
         ret = recvfrom(sock, &size, sizeof(size), 0, (struct sockaddr *)&servaddr, &addr_len);
-        if (ret == -1)
+        if (ret < 0)
+            error("407");
+        /*if (ret == -1)
         {
-            if (errno != EINTR)
+            if (errno != EINTR && errno != EAGAIN)
                 ERR_EXIT("recvfrom");
-        }
+        }*/
         //printf("%lld\n", size);
 
         // Convert it back into picture
@@ -421,7 +431,7 @@ void udp_client(char *ip, int port)
         long double progress = 0;
         int record = 0;
         bzero(recv_buf, 2);
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
+        //setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&sock_timeout, sizeof(sock_timeout));
         while (sz < size)
         {
             bytesReceived = recvfrom(sock, recv_buf, 1, 0, (struct sockaddr *)&servaddr, &addr_len);
@@ -430,7 +440,9 @@ void udp_client(char *ip, int port)
                 sendto(sock, "LOSS", 4, 0, (struct sockaddr *)&servaddr, addr_len);
                 continue;
             }
-            sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
+            ret = sendto(sock, "ACK", 3, 0, (struct sockaddr *)&servaddr, addr_len);
+            if (ret < 0)
+                error("443");
             sz += bytesReceived;
             recv_buf[1] = '\0';
             progress = sz / size * 100;
@@ -447,7 +459,6 @@ void udp_client(char *ip, int port)
             fwrite(recv_buf, 1, bytesReceived, image);
             bzero(recv_buf, 2);
         }
-        printf("Completed\n");
         fclose(image);
     }
     close(sock);
@@ -463,7 +474,6 @@ void send_message(int sock)
     if (message[strlen(message) - 1] == '\n')
         message[strlen(message) - 1] = '\0';
     words = strlen(message);
-    //printf("words = %ld\n", strlen(message));
     int n = write(sock, &words, sizeof(words));
     if (n < 0)
         error("ERROR writing to socket");
@@ -478,6 +488,7 @@ void send_message(int sock)
             error("ERROR writing to socket");
         ++index;
     }
+    printf("Completed\n");
 }
 void recv_message(int sock)
 {
@@ -488,7 +499,6 @@ void recv_message(int sock)
         error("ERROR reading from socket");
     char message[words];
     bzero(message, words);
-    //printf("words = %d\n", words);
 
     double len = 0;
     int bytesReceived = 0;
@@ -518,7 +528,6 @@ void recv_message(int sock)
     {
         printf("Read Error\n");
     }
-    printf("Completed\n");
     printf("message : %s\n", message);
 }
 void send_image(int sock, char *fileName)
@@ -548,7 +557,7 @@ void send_image(int sock, char *fileName)
         write(sock, send_buf, sizeof(send_buf));
         bzero(send_buf, sizeof(send_buf));
     }
-    printf("File transfer completed\n");
+    printf("Completed\n");
 }
 
 void recv_image(int sock)
@@ -599,7 +608,6 @@ void recv_image(int sock)
     {
         printf("Read Error\n");
     }
-    printf("Completed\n");
     fclose(image);
 }
 
