@@ -100,6 +100,12 @@ void tcp_server(char *ip, int port, char *fileName)
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = inet_addr(ip);      // Convert IP string to int
     serv_addr.sin_port = htons(port);               // Host to network short integer
+    
+    /* Avoid the bind error which says the address already in use */ 
+    int on = 1;
+    if((setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR,&on,sizeof(on)))<0)
+        error("setsockopt failed");
+
     if (bind(sockfd, (struct sockaddr *)&serv_addr, // Bind the address to the socket
              sizeof(serv_addr)) < 0)
         error("ERROR on binding");
@@ -183,6 +189,11 @@ void udp_server(char *ip, int port, char fileName[256])
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(ip);
+    
+    /* Avoid the bind error which says the address already in use */ 
+    int on = 1;
+    if((setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&on,sizeof(on)))<0)
+        error("setsockopt failed");
 
     if (bind(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
         ERR_EXIT("bind error");
